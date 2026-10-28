@@ -1,7 +1,10 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 
-import { UNIT_TEMPLATES, rollShopOffers } from '../data/units';
+import {
+  UNIT_TEMPLATES, rollShopOffers, offerCost,
+  RANKS, RANK_COST_MULT, MAX_RANK_INDEX, MERGE_COUNT,
+} from '../data/units';
 import { rollRelics } from '../data/relics';
 import { generateEnemyTeam } from '../data/enemies';
 import { makeMapNodes } from '../data/map';
@@ -16,10 +19,11 @@ const PLAYER_MAX_HP = 20;
 const emptyBoard = () =>
   Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(null));
 const emptyBench = () => Array(BENCH_SIZE).fill(null);
-const makeInstance = (tplId) => ({ uid: uid('unit'), tplId, level: 1 });
+
+/** Unit instance — `rank` defaults to 0 (F tier). */
+const makeInstance = (tplId, rank = 0) => ({ uid: uid('unit'), tplId, rank });
 
 /* ------------------------- location helpers ------------------------- */
-// A "location" is { type:'bench', index } or { type:'board', r, c }
 
 const readLoc = (s, loc) =>
   loc.type === 'bench' ? s.bench[loc.index] ?? null : s.board[loc.r][loc.c] ?? null;
@@ -29,12 +33,13 @@ const writeLoc = (s, loc, unit) => {
   else s.board[loc.r][loc.c] = unit;
 };
 
+const removeAt = (s, loc) => writeLoc(s, loc, null);
+
 const sameLoc = (a, b) => {
   if (!a || !b || a.type !== b.type) return false;
   return a.type === 'bench' ? a.index === b.index : a.r === b.r && a.c === b.c;
 };
 
-/** Moves or swaps a unit between two locations. */
 const moveUnit = (s, from, to) => {
   if (sameLoc(from, to)) return;
   const a = readLoc(s, from);
@@ -44,15 +49,82 @@ const moveUnit = (s, from, to) => {
   writeLoc(s, to, a);
 };
 
-const toast = (s, msg) => {
-  s.ui.toast = { id: uid('toast'), msg };
+const toast = (s, msg, tone = 'error') => {
+  s.ui.toast = { id: uid('toast'), msg, tone };
+};
+
+/** Returns every { unit, loc } pair across bench + board. */
+const collectAllUnits = (s) => {
+  const out = [];
+  for (let i = 0; i < s.bench.length; i++) {
+    if (s.bench[i]) out.push({ unit: s.bench[i], loc: { type: 'bench', index: i } });
+  }
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (s.board[r][c]) out.push({ unit: s.board[r][c], loc: { type: 'board', r, c } });
+    }
+  }
+  return out;
+};
+
+const findBenchSlot = (s) => s.bench.findIndex((b) => b === null);
+
+/** First empty deployable cell (player side = columns 0..3). */
+const findEmptyBoardSlot = (s) => {
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c <= 3; c++) {
+      if (!s.board[r][c]) return { r, c };
+    }
+  }
+  return null;
+};
+
+/**
+ * Merges any group of MERGE_COUNT identical (tplId, rank) copies into one
+ * unit of rank+1. Runs repeatedly so a fresh rank-up can cascade into
+ * another merge. Prefers keeping an on-board keeper so deployed units
+ * remain deployed.
+ */
+const runMergePass = (s) => {
+  let safety = 20; // hard ceiling to prevent runaway cascade
+  while (safety-- > 0) {
+    const groups = {};
+    for (const entry of collectAllUnits(s)) {
+      if (entry.unit.rank >= MAX_RANK_INDEX) continue; // S can't merge up
+      const key = `${entry.unit.tplId}:${entry.unit.rank}`;
+      (groups[key] ??= []).push(entry);
+    }
+
+    let didMerge = false;
+    for (const group of Object.values(groups)) {
+      if (group.length < MERGE_COUNT) continue;
+
+      // On-board entries first so the keeper stays deployed.
+      group.sort((a, b) =>
+        (a.loc.type === 'board' ? 0 : 1) - (b.loc.type === 'board' ? 0 : 1)
+      );
+
+      const keeper = group[0];
+      const consumed = group.slice(1, MERGE_COUNT);
+
+      for (const entry of consumed) removeAt(s, entry.loc);
+      keeper.unit.rank += 1;
+
+      const tpl = UNIT_TEMPLATES[keeper.unit.tplId];
+      toast(s, `✦ ${tpl.name} ascended to ${RANKS[keeper.unit.rank]}-Rank`, 'success');
+
+      didMerge = true;
+      break; // restart to catch the newly-created group
+    }
+    if (!didMerge) break;
+  }
 };
 
 /* ----------------------------- the store ---------------------------- */
+
 export const useGameStore = create(
-  immer((set, get) => ({
-    /* -------- run state -------- */
-    phase: 'SHOP',            // SHOP | COMBAT | REWARD | MAP | GAMEOVER
+  immer((set) => ({
+    phase: 'SHOP',
     round: 1,
     gold: 12,
     hp: PLAYER_MAX_HP,
@@ -61,20 +133,16 @@ export const useGameStore = create(
     relics: [],
     lastResult: null,
 
-    /* -------- board / inventory -------- */
     board: emptyBoard(),
     bench: emptyBench(),
     shop: { offers: rollShopOffers(1), locked: false },
 
-    /* -------- encounter data -------- */
     enemyTeam: generateEnemyTeam(1, 'standard'),
     combat: null,
 
-    /* -------- meta screens -------- */
     rewardChoices: [],
     mapNodes: [],
 
-    /* -------- ui-only -------- */
     ui: { selected: null, toast: null, speed: 1 },
 
     /* =================== SHOP ACTIONS =================== */
@@ -85,14 +153,51 @@ export const useGameStore = create(
         const offer = s.shop.offers[index];
         if (!offer) return;
 
-        const tpl = UNIT_TEMPLATES[offer.tplId];
-        if (s.gold < tpl.cost) return toast(s, 'Not enough gold.');
-        const slot = s.bench.findIndex((b) => b === null);
-        if (slot === -1) return toast(s, 'Your bench is full.');
+        const cost = offerCost(offer);
+        if (s.gold < cost) return toast(s, 'Not enough gold.');
 
-        s.gold -= tpl.cost;
-        s.bench[slot] = makeInstance(offer.tplId);
+        const rank = offer.rank ?? 0;
+        const newInstance = makeInstance(offer.tplId, rank);
+
+        const benchSlot = findBenchSlot(s);
+
+        if (benchSlot !== -1) {
+          // Fast path: bench has room, just add + merge.
+          s.bench[benchSlot] = newInstance;
+          runMergePass(s);
+        } else {
+          // Bench is full. Try a direct merge against 2 existing copies.
+          const matches = collectAllUnits(s).filter(
+            (e) => e.unit.tplId === offer.tplId && e.unit.rank === rank
+          );
+
+          if (matches.length >= 2 && rank < MAX_RANK_INDEX) {
+            matches.sort((a, b) =>
+              (a.loc.type === 'board' ? 0 : 1) - (b.loc.type === 'board' ? 0 : 1)
+            );
+            const keeper = matches[0];
+            const consumed = matches[1];
+
+            removeAt(s, consumed.loc);
+            keeper.unit.rank += 1;
+
+            const tpl = UNIT_TEMPLATES[keeper.unit.tplId];
+            toast(s, `✦ ${tpl.name} ascended to ${RANKS[keeper.unit.rank]}-Rank`, 'success');
+
+            runMergePass(s); // cascades
+          } else {
+            // Last resort: auto-place on an empty board cell.
+            const boardSlot = findEmptyBoardSlot(s);
+            if (!boardSlot) return toast(s, 'No space to summon.');
+
+            s.board[boardSlot.r][boardSlot.c] = newInstance;
+            runMergePass(s);
+          }
+        }
+
+        s.gold -= cost;
         s.shop.offers[index] = null;
+        s.ui.selected = null;
       });
     },
 
@@ -107,24 +212,23 @@ export const useGameStore = create(
     },
 
     toggleLock() {
-      set((s) => {
-        s.shop.locked = !s.shop.locked;
-      });
+      set((s) => { s.shop.locked = !s.shop.locked; });
     },
 
-    /** Right-click / hover-X sells a unit back for its cost. */
+    /** Sell refund scales with rank — refunds exactly the invested value. */
     sellAt(loc) {
       set((s) => {
         if (s.phase !== 'SHOP') return;
         const unit = readLoc(s, loc);
         if (!unit) return;
-        s.gold += UNIT_TEMPLATES[unit.tplId].cost;
-        writeLoc(s, loc, null);
+        const tpl = UNIT_TEMPLATES[unit.tplId];
+        s.gold += tpl.cost * RANK_COST_MULT[unit.rank ?? 0];
+        removeAt(s, loc);
         if (sameLoc(s.ui.selected, loc)) s.ui.selected = null;
       });
     },
 
-    /* =================== SELECTION / PLACEMENT =================== */
+    /* =================== SELECTION =================== */
 
     clickBenchSlot(index) {
       set((s) => {
@@ -152,21 +256,16 @@ export const useGameStore = create(
       });
     },
 
-    /** Drag & drop entry point — same swap logic as clicking. */
     dropAt(fromLoc, toLoc) {
       set((s) => {
         if (s.phase !== 'SHOP') return;
-        if (toLoc.type === 'board' && !s.board[toLoc.r]?.[toLoc.c] &&
-            s.board[toLoc.r]?.[toLoc.c] !== null) return; // out of bounds guard
         moveUnit(s, fromLoc, toLoc);
         s.ui.selected = null;
       });
     },
 
     clearSelection() {
-      set((s) => {
-        s.ui.selected = null;
-      });
+      set((s) => { s.ui.selected = null; });
     },
 
     /* =================== COMBAT =================== */
@@ -179,7 +278,15 @@ export const useGameStore = create(
         for (let r = 0; r < BOARD_SIZE; r++) {
           for (let c = 0; c < BOARD_SIZE; c++) {
             const unit = s.board[r][c];
-            if (unit) playerUnits.push({ uid: unit.uid, tplId: unit.tplId, row: r, col: c });
+            if (unit) {
+              playerUnits.push({
+                uid: unit.uid,
+                tplId: unit.tplId,
+                row: r,
+                col: c,
+                rank: unit.rank ?? 0,
+              });
+            }
           }
         }
         if (!playerUnits.length) return toast(s, 'Deploy at least one unit to fight.');
@@ -194,7 +301,6 @@ export const useGameStore = create(
       });
     },
 
-    /** Called by the rAF loop at a fixed timestep. */
     tickCombat(dt) {
       set((s) => {
         if (s.phase !== 'COMBAT' || !s.combat) return;
@@ -204,9 +310,7 @@ export const useGameStore = create(
     },
 
     setSpeed(speed) {
-      set((s) => {
-        s.ui.speed = speed;
-      });
+      set((s) => { s.ui.speed = speed; });
     },
 
     /* =================== REWARD / MAP =================== */
@@ -214,7 +318,7 @@ export const useGameStore = create(
     chooseRelic(relicId) {
       set((s) => {
         if (relicId) s.relics.push(relicId);
-        else s.gold += 3; // skip compensation
+        else s.gold += 3;
         s.rewardChoices = [];
         s.mapNodes = makeMapNodes(s.round);
         s.phase = 'MAP';
@@ -232,7 +336,7 @@ export const useGameStore = create(
 
         if (node.type === 'shop') {
           s.gold += 6;
-          s.shop.offers = rollShopOffers(s.round); // free reroll
+          s.shop.offers = rollShopOffers(s.round);
           s.shop.locked = false;
         } else if (!s.shop.locked) {
           s.shop.offers = rollShopOffers(s.round);
@@ -248,9 +352,7 @@ export const useGameStore = create(
     /* =================== MISC =================== */
 
     clearToast() {
-      set((s) => {
-        s.ui.toast = null;
-      });
+      set((s) => { s.ui.toast = null; });
     },
 
     restart() {
@@ -276,29 +378,22 @@ export const useGameStore = create(
   }))
 );
 
-/* ------------------------------------------------------------------ */
-/*  Post-combat resolution — runs inside the immer producer.           */
-/* ------------------------------------------------------------------ */
 function resolveCombat(s) {
-  const combat = s.combat;
-  const won = combat.result === 'victory';
-
+  const won = s.combat.result === 'victory';
   if (won) {
     const goldGain =
       4 + s.round +
       (s.encounter === 'elite' ? 3 : 0) +
       (s.relics.includes('sovereign_ledger') ? 2 : 0);
-
     s.gold += goldGain;
     s.lastResult = { won: true, gold: goldGain };
     s.rewardChoices = rollRelics(3, s.relics);
     s.phase = 'REWARD';
   } else {
-    const survivors = combat.units.filter((u) => u.team === 'enemy' && u.alive).length;
+    const survivors = s.combat.units.filter((u) => u.team === 'enemy' && u.alive).length;
     const damage = 3 + survivors * 2 + Math.floor(s.round / 2);
     s.hp = Math.max(0, s.hp - damage);
     s.lastResult = { won: false, damage };
-
     if (s.hp <= 0) {
       s.phase = 'GAMEOVER';
     } else {

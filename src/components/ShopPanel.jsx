@@ -1,5 +1,8 @@
-import { UNIT_TEMPLATES } from '../data/units';
+import {
+  UNIT_TEMPLATES, RANKS, RANK_COST_MULT, offerCost,
+} from '../data/units';
 import { useGameStore } from '../store/gameStore';
+import RankBadge from './RankBadge';
 
 export default function ShopPanel() {
   const offers = useGameStore((s) => s.shop.offers);
@@ -41,7 +44,10 @@ export default function ShopPanel() {
           }
 
           const tpl = UNIT_TEMPLATES[offer.tplId];
-          const affordable = gold >= tpl.cost;
+          const rank = offer.rank ?? 0;
+          const cost = offerCost(offer);
+          const affordable = gold >= cost;
+          const isUpgraded = rank > 0;
 
           return (
             <button
@@ -53,21 +59,25 @@ export default function ShopPanel() {
                 affordable
                   ? 'border-purple-400/25 bg-purple-500/[0.06] hover:-translate-y-[2px] hover:border-cyan-300/70 hover:bg-cyan-400/[0.08] hover:shadow-glow-cyan'
                   : 'cursor-not-allowed border-purple-400/10 bg-slate-950/30 opacity-45',
+                isUpgraded && 'border-astral-gold/40',
               ].join(' ')}
             >
-              {/* Glyph medallion */}
-              <div
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border"
-                style={{
-                  borderColor: `${tpl.accent}66`,
-                  background: `radial-gradient(circle at 50% 30%, ${tpl.accent}1f, rgba(5,3,15,0.9) 70%)`,
-                  color: tpl.accent,
-                  boxShadow: `0 0 14px ${tpl.accent}33`,
-                }}
-              >
-                <span className="text-base" style={{ textShadow: `0 0 10px ${tpl.accent}` }}>
-                  {tpl.glyph}
-                </span>
+              {/* Glyph medallion with rank pip */}
+              <div className="relative shrink-0">
+                <div
+                  className="flex h-10 w-10 items-center justify-center rounded-full border"
+                  style={{
+                    borderColor: `${tpl.accent}66`,
+                    background: `radial-gradient(circle at 50% 30%, ${tpl.accent}1f, rgba(5,3,15,0.9) 70%)`,
+                    color: tpl.accent,
+                    boxShadow: `0 0 14px ${tpl.accent}33`,
+                  }}
+                >
+                  <span className="text-base" style={{ textShadow: `0 0 10px ${tpl.accent}` }}>
+                    {tpl.glyph}
+                  </span>
+                </div>
+                <RankBadge rank={rank} size={15} className="absolute -bottom-1 -right-1" />
               </div>
 
               <div className="min-w-0 flex-1">
@@ -87,9 +97,14 @@ export default function ShopPanel() {
                 </p>
               </div>
 
-              <div className="flex shrink-0 items-center gap-1 border border-astral-gold/40 bg-amber-400/10 px-2 py-1 text-astral-gold panel-cut">
+              <div className={[
+                'flex shrink-0 items-center gap-1 border px-2 py-1 panel-cut',
+                isUpgraded
+                  ? 'border-astral-gold/50 bg-amber-400/10 text-astral-gold'
+                  : 'border-astral-gold/40 bg-amber-400/10 text-astral-gold',
+              ].join(' ')}>
                 <span className="text-[10px]">◈</span>
-                <span className="font-display text-[11px] tabular-nums">{tpl.cost}</span>
+                <span className="font-display text-[11px] tabular-nums">{cost}</span>
               </div>
             </button>
           );
@@ -97,11 +112,7 @@ export default function ShopPanel() {
       </div>
 
       <div className="mt-4 space-y-2">
-        <button
-          onClick={rerollShop}
-          disabled={gold < 2}
-          className="btn-astral w-full"
-        >
+        <button onClick={rerollShop} disabled={gold < 2} className="btn-astral w-full">
           Reroll · ◈ 2
         </button>
         <button

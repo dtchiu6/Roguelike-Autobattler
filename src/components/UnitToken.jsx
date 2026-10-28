@@ -1,13 +1,17 @@
-import { UNIT_TEMPLATES } from '../data/units';
+import { UNIT_TEMPLATES, MERGE_COUNT } from '../data/units';
+import RankBadge from './RankBadge';
 
 const ARENA_COLS = 9;
 const ARENA_ROWS = 4;
 
 /**
  * A single celestial medallion on the arena.
- * Rendered with absolute % coordinates so CSS can tween movement.
+ * Now renders a rank badge and — during shop phase — a "2/3" progress pill
+ * when the unit is one copy away from merging.
  */
-export default function UnitToken({ unit, combatTime, preview, onClick, onDragStart }) {
+export default function UnitToken({
+  unit, combatTime, preview, duplicateCount, onClick, onDragStart,
+}) {
   const tpl = UNIT_TEMPLATES[unit.tplId];
   if (!tpl) return null;
 
@@ -17,12 +21,16 @@ export default function UnitToken({ unit, combatTime, preview, onClick, onDragSt
   const manaPct = unit.maxMana ? Math.max(0, (unit.mana / unit.maxMana) * 100) : 0;
   const isPlayer = unit.team !== 'enemy';
   const dead = unit.alive === false;
+  const rank = unit.rank ?? 0;
 
-  // Attack lunge animation for a brief window after each swing
   const lunging = combatTime != null && combatTime - (unit.lastAttack ?? -9999) < 180;
 
   const left = ((unit.col + 0.5) / ARENA_COLS) * 100;
   const top = ((unit.row + 0.5) / ARENA_ROWS) * 100;
+
+  // Only show progress when the caller supplies a count (shop phase).
+  const showProgress =
+    duplicateCount != null && duplicateCount >= 2 && duplicateCount < MERGE_COUNT;
 
   return (
     <div
@@ -51,13 +59,11 @@ export default function UnitToken({ unit, combatTime, preview, onClick, onDragSt
           <span className="text-lg leading-none" style={{ textShadow: `0 0 10px ${tpl.accent}` }}>
             {tpl.glyph}
           </span>
+          <RankBadge rank={rank} size={14} className="absolute -right-2 -top-2" />
           {unit.shield > 0 && (
-            <span className="absolute -right-1 -top-1 rounded-full border border-cyan-300/60 bg-slate-950/90 px-1 text-[8px] text-cyan-200">
+            <span className="absolute -left-1 -top-1 rounded-full border border-cyan-300/60 bg-slate-950/90 px-1 text-[8px] text-cyan-200">
               {Math.round(unit.shield)}
             </span>
-          )}
-          {!isPlayer && (
-            <span className="absolute -bottom-1 h-1 w-1 rounded-full bg-rose-400/80" />
           )}
         </div>
 
@@ -82,6 +88,13 @@ export default function UnitToken({ unit, combatTime, preview, onClick, onDragSt
               style={{ width: `${manaPct}%`, boxShadow: '0 0 8px rgba(140,232,247,0.8)' }}
             />
           </div>
+        )}
+
+        {/* Merge-progress badge (shop phase only) */}
+        {showProgress && (
+          <span className="mt-[2px] rounded-full border border-astral-gold/50 bg-slate-950/85 px-1.5 text-[8px] font-display leading-tight tabular-nums text-astral-gold">
+            {duplicateCount}/{MERGE_COUNT}
+          </span>
         )}
       </div>
     </div>

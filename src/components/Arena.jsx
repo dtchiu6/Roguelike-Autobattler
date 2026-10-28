@@ -1,5 +1,6 @@
 import { UNIT_TEMPLATES } from '../data/units';
 import { useGameStore } from '../store/gameStore';
+import { useDuplicateCounts } from '../hooks/useDuplicateCounts';
 import UnitToken from './UnitToken';
 
 const COLS = 9;
@@ -10,13 +11,17 @@ const RIFT_COL = 4;         // neutral middle column
 export default function Arena() {
   const phase = useGameStore((s) => s.phase);
   const board = useGameStore((s) => s.board);
+  const bench = useGameStore((s) => s.bench);
   const enemyTeam = useGameStore((s) => s.enemyTeam);
   const combat = useGameStore((s) => s.combat);
   const selected = useGameStore((s) => s.ui.selected);
 
   const clickBoardCell = useGameStore((s) => s.clickBoardCell);
-  const clickBenchSlot = useGameStore((s) => s.clickBenchSlot);
   const dropAt = useGameStore((s) => s.dropAt);
+
+  // Duplicate counts across bench + board, keyed by "tplId:rank".
+  // Used to surface "2/3" merge-progress badges during the shop phase.
+  const duplicates = useDuplicateCounts(bench, board);
 
   const inCombat = phase === 'COMBAT';
   const canEdit = phase === 'SHOP';
@@ -25,9 +30,11 @@ export default function Arena() {
   const tokens = inCombat && combat
     ? combat.units
     : [
-        ...board.flatMap((row, r) =>
-          row.map((unit, c) => (unit ? { ...unit, row: r, col: c, team: 'player' } : null))
-        ).filter(Boolean),
+        ...board
+          .flatMap((row, r) =>
+            row.map((unit, c) => (unit ? { ...unit, row: r, col: c, team: 'player' } : null))
+          )
+          .filter(Boolean),
         ...enemyTeam.map((e) => ({ ...e, team: 'enemy' })),
       ];
 
@@ -43,11 +50,16 @@ export default function Arena() {
     if (!raw) return;
     try {
       dropAt(JSON.parse(raw), loc);
-    } catch { /* ignore malformed payloads */ }
+    } catch {
+      /* ignore malformed payloads */
+    }
   };
 
+  /* ---- Pre-compute static grid cells once ---- */
   const cells = [];
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) cells.push({ r, c });
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) cells.push({ r, c });
+  }
 
   return (
     <div className="relative">
@@ -67,7 +79,6 @@ export default function Arena() {
           {cells.map(({ r, c }) => {
             const isDeploy = c <= DEPLOY_MAX_COL;
             const isRift = c === RIFT_COL;
-            const isEnemyZone = c > RIFT_COL;
             const isTargetable = canEdit && isDeploy;
             const loc = { type: 'board', r, c };
 
@@ -80,7 +91,9 @@ export default function Arena() {
                   e.preventDefault();
                   e.currentTarget.dataset.hover = 'true';
                 }}
-                onDragLeave={(e) => { delete e.currentTarget.dataset.hover; }}
+                onDragLeave={(e) => {
+                  delete e.currentTarget.dataset.hover;
+                }}
                 onDrop={(e) => isTargetable && handleDrop(e, loc)}
                 className={[
                   'relative border transition-all duration-300 ease-out',
@@ -89,7 +102,8 @@ export default function Arena() {
                     : isDeploy
                       ? 'border-purple-400/15 bg-purple-500/[0.035]'
                       : 'border-rose-400/[0.08] bg-rose-500/[0.03]',
-                  isTargetable && 'cursor-pointer hover:border-cyan-300/60 hover:bg-cyan-400/10 hover:shadow-glow-cyan',
+                  isTargetable &&
+                    'cursor-pointer hover:border-cyan-300/60 hover:bg-cyan-400/10 hover:shadow-glow-cyan',
                   isTargetable && selected && 'border-cyan-300/25',
                 ].join(' ')}
                 data-hover-target={isTargetable ? 'true' : undefined}
@@ -98,10 +112,13 @@ export default function Arena() {
           })}
         </div>
 
-        {/* Rift shimmer */}
+        {/* Rift shimmer — decorative vertical band at the dividing column */}
         <div
           className="pointer-events-none absolute inset-y-0 animate-pulse-slow"
-          style={{ left: `${(RIFT_COL / COLS) * 100}%`, width: `${(1 / COLS) * 100}%` }}
+          style={{
+            left: `${(RIFT_COL / COLS) * 100}%`,
+            width: `${(1 / COLS) * 100}%`,
+          }}
         >
           <div className="h-full w-full bg-gradient-to-b from-cyan-300/0 via-cyan-300/[0.09] to-cyan-300/0" />
         </div>
@@ -113,9 +130,19 @@ export default function Arena() {
             unit={unit}
             combatTime={inCombat ? combat?.time : undefined}
             preview={!inCombat && unit.team === 'enemy'}
+            duplicateCount={
+              canEdit && unit.team !== 'enemy'
+                ? duplicates[`${unit.tplId}:${unit.rank ?? 0}`] ?? 1
+                : undefined
+            }
             onDragStart={
               canEdit && unit.team !== 'enemy'
-                ? (e) => handleDragStart(e, { type: 'board', r: unit.row, c: unit.col })
+                ? (e) =>
+                    handleDragStart(e, {
+                      type: 'board',
+                      r: unit.row,
+                      c: unit.col,
+                    })
                 : undefined
             }
             onClick={
@@ -139,11 +166,19 @@ export default function Arena() {
                 style={{
                   left: `${((f.col + 0.5) / COLS) * 100}%`,
                   top: `${((f.row + 0.5) / ROWS) * 100}%`,
-                  color: isHeal ? '#86efac' : isShield ? '#8ce8f7' : isAbility ? '#f3d79b' : '#fda4af',
-                  textShadow: '0 0 10px currentColor, 0 2px 4px rgba(0,0,0,0.9)',
+                  color: isHeal
+                    ? '#86efac'
+                    : isShield
+                      ? '#8ce8f7'
+                      : isAbility
+                        ? '#f3d79b'
+                        : '#fda4af',
+                  textShadow:
+                    '0 0 10px currentColor, 0 2px 4px rgba(0,0,0,0.9)',
                 }}
               >
-                {isHeal ? '+' : isShield ? '⛨' : ''}{f.amount}
+                {isHeal ? '+' : isShield ? '⛨' : ''}
+                {f.amount}
               </div>
             );
           })}

@@ -25,16 +25,18 @@ function foldRelicMods(relicIds = []) {
 
 function buildUnit(src, team, mods) {
   const tpl = UNIT_TEMPLATES[src.tplId];
-  const scale = src.statMul ?? 1;
+  const rank = src.rank ?? 0;
+  const rankMul = RANK_STAT_MULT[rank];
   const isPlayer = team === 'player';
 
-  const maxHp = Math.round(tpl.maxHp * scale * (isPlayer ? mods.hpMul : 1));
+  const maxHp = Math.round(tpl.maxHp * rankMul * (isPlayer ? mods.hpMul : 1));
   const attackSpeed = tpl.attackSpeed * (isPlayer ? mods.asMul : 1);
 
   return {
     uid: src.uid,
     team,
     tplId: tpl.id,
+    rank,                                          // ← carried into combat UI
     name: tpl.name,
     glyph: tpl.glyph,
     accent: tpl.accent,
@@ -42,7 +44,7 @@ function buildUnit(src, team, mods) {
     col: src.col,
     maxHp,
     hp: maxHp,
-    attack: Math.round(tpl.attack * scale * (isPlayer ? mods.atkMul : mods.enemyAtkMul)),
+    attack: Math.round(tpl.attack * rankMul * (isPlayer ? mods.atkMul : mods.enemyAtkMul)),
     attackSpeed,
     range: tpl.range,
     maxMana: tpl.maxMana,
@@ -66,14 +68,8 @@ export function createCombatState({ player, enemy, relics }) {
     ...enemy.map((e) => buildUnit(e, 'enemy', mods)),
   ];
   return {
-    time: 0,
-    status: 'running',       // running | victory | defeat | resolved
-    result: null,
-    endTime: 0,
-    units,
-    floaters: [],
-    log: [],
-    seq: 0,
+    time: 0, status: 'running', result: null, endTime: 0,
+    units, floaters: [], log: [], seq: 0,
   };
 }
 
