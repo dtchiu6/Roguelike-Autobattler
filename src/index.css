@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-astral-ink text-slate-200 font-body antialiased;
+    background-image:
+      radial-gradient(1200px 700px at 15% -10%, rgba(124,58,237,0.22), transparent 60%),
+      radial-gradient(900px 600px at 95% 0%, rgba(34,211,238,0.12), transparent 60%),
+      radial-gradient(1000px 800px at 50% 120%, rgba(168,85,247,0.16), transparent 65%);
+    background-attachment: fixed;
+  }
+  ::selection { background: rgba(140,232,247,0.3); }
+}
+
+@layer components {
+  /* Elegant corner-cutout panel — the signature shape language */
+  .panel-cut {
+    clip-path: polygon(
+      16px 0, 100% 0, 100% calc(100% - 16px),
+      calc(100% - 16px) 100%, 0 100%, 0 16px
+    );
+  }
+  .panel {
+    @apply relative bg-slate-950/55 backdrop-blur-md
+           border border-purple-400/25
+           shadow-[0_0_40px_-12px_rgba(140,232,247,0.25)]
+           panel-cut;
+  }
+  .panel::after {
+    content: '';
+    @apply pointer-events-none absolute inset-0 opacity-60;
+    background: linear-gradient(160deg, rgba(185,163,255,0.10), transparent 42%);
+  }
+  .rule-thin {
+    background: linear-gradient(90deg, transparent, rgba(185,163,255,0.55), transparent);
+    height: 1px;
+  }
+  .btn-astral {
+    @apply relative px-4 py-2 font-display tracking-[0.18em] text-[11px] uppercase
+           border border-purple-300/30 bg-purple-500/10 text-slate-200
+           transition-all duration-300 ease-out panel-cut;
+  }
+  .btn-astral:hover:not(:disabled) {
+    @apply border-cyan-300/70 bg-cyan-400/10 text-cyan-100 shadow-glow-cyan -translate-y-[1px];
+  }
+  .btn-astral:disabled { @apply opacity-35 cursor-not-allowed; }
+  .btn-gold {
+    @apply border-astral-gold/50 bg-amber-400/10 text-astral-gold;
+  }
+  .btn-gold:hover:not(:disabled) {
+    @apply border-astral-gold bg-amber-400/20 text-amber-100 shadow-glow-gold;
+  }
+  .scroll-thin::-webkit-scrollbar { width: 6px; }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(185,163,255,0.35); border-radius: 99px;
+  }
+}
