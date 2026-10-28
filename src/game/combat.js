@@ -1,4 +1,4 @@
-import { UNIT_TEMPLATES } from '../data/units';
+import { UNIT_TEMPLATES, RANK_STAT_MULT } from '../data/units';
 import { RELIC_MAP } from '../data/relics';
 
 const MOVE_COOLDOWN = 620;   // ms between grid steps
@@ -23,10 +23,16 @@ function foldRelicMods(relicIds = []) {
   return mods;
 }
 
+/** Builds a live combat unit. Rank drives its stat curve. */
 function buildUnit(src, team, mods) {
   const tpl = UNIT_TEMPLATES[src.tplId];
+  if (!tpl) {
+    // Defensive: never crash a fight over a missing template.
+    throw new Error(`Unknown unit template "${src.tplId}"`);
+  }
+
   const rank = src.rank ?? 0;
-  const rankMul = RANK_STAT_MULT[rank];
+  const rankMul = RANK_STAT_MULT[rank] ?? 1;
   const isPlayer = team === 'player';
 
   const maxHp = Math.round(tpl.maxHp * rankMul * (isPlayer ? mods.hpMul : 1));
@@ -36,7 +42,7 @@ function buildUnit(src, team, mods) {
     uid: src.uid,
     team,
     tplId: tpl.id,
-    rank,                                          // ← carried into combat UI
+    rank,
     name: tpl.name,
     glyph: tpl.glyph,
     accent: tpl.accent,
@@ -44,7 +50,9 @@ function buildUnit(src, team, mods) {
     col: src.col,
     maxHp,
     hp: maxHp,
-    attack: Math.round(tpl.attack * rankMul * (isPlayer ? mods.atkMul : mods.enemyAtkMul)),
+    attack: Math.round(
+      tpl.attack * rankMul * (isPlayer ? mods.atkMul : mods.enemyAtkMul)
+    ),
     attackSpeed,
     range: tpl.range,
     maxMana: tpl.maxMana,
@@ -60,7 +68,7 @@ function buildUnit(src, team, mods) {
   };
 }
 
-/** Creates the immutable-ish combat snapshot stored in Zustand. */
+/** Creates the initial combat snapshot stored in Zustand. */
 export function createCombatState({ player, enemy, relics }) {
   const mods = foldRelicMods(relics);
   const units = [
@@ -68,8 +76,14 @@ export function createCombatState({ player, enemy, relics }) {
     ...enemy.map((e) => buildUnit(e, 'enemy', mods)),
   ];
   return {
-    time: 0, status: 'running', result: null, endTime: 0,
-    units, floaters: [], log: [], seq: 0,
+    time: 0,
+    status: 'running',       // running | victory | defeat | resolved
+    result: null,
+    endTime: 0,
+    units,
+    floaters: [],
+    log: [],
+    seq: 0,
   };
 }
 
@@ -91,7 +105,7 @@ function pushFloater(c, unit, amount, kind) {
     row: unit.row,
     col: unit.col,
     amount: Math.round(amount),
-    kind,                 // hit | ability | heal | shield
+    kind,
     t: c.time,
   });
 }
@@ -106,7 +120,7 @@ function dealDamage(c, target, rawAmount, kind) {
     remaining -= absorbed;
   }
   target.hp = Math.max(0, target.hp - remaining);
-  target.mana = Math.min(target.maxMana, target.mana + 6); // taking damage builds mana
+  target.mana = Math.min(target.maxMana, target.mana + 6);
   pushFloater(c, target, Math.max(1, rawAmount), kind);
 
   if (target.hp <= 0 && target.alive) {
@@ -130,7 +144,6 @@ function stepToward(c, unit, target) {
   const dr = Math.sign(target.row - unit.row);
   const dc = Math.sign(target.col - unit.col);
 
-  // Move along the axis with the largest gap first, then fall back.
   const options = [];
   if (Math.abs(target.col - unit.col) >= Math.abs(target.row - unit.row)) {
     if (dc) options.push([0, dc]);
@@ -193,7 +206,11 @@ function castAbility(c, unit, target) {
 
     case 'execute': {
       const isLow = target.hp / target.maxHp < 0.4;
-      dealDamage(c, target, isLow ? ability.power + ability.bonus : ability.power, 'ability');
+      dealDamage(
+        c, target,
+        isLow ? ability.power + ability.bonus : ability.power,
+        'ability'
+      );
       break;
     }
 
@@ -230,8 +247,11 @@ function evaluate(c) {
   c.status = enemyAlive ? 'defeat' : 'victory';
   c.result = c.status;
   c.endTime = c.time;
-  pushLog(c, c.status === 'victory' ? 'The heavens fall silent — victory.' : 'Your light gutters out…',
-    c.status === 'victory' ? 'player' : 'enemy');
+  pushLog(
+    c,
+    c.status === 'victory' ? 'The heavens fall silent — victory.' : 'Your light gutters out…',
+    c.status === 'victory' ? 'player' : 'enemy'
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -258,7 +278,7 @@ export function simulateTick(c, dt) {
       // 2a. Ability takes priority over a basic attack
       if (unit.mana >= unit.maxMana) {
         castAbility(c, unit, target);
-        continue; // casting consumes this tick
+        continue;
       }
 
       const distance = cheb(unit, target);
@@ -270,7 +290,7 @@ export function simulateTick(c, dt) {
         basicAttack(c, unit, target);
         unit.attackTimer = 1000 / (unit.attackSpeed * slowed);
       } else if (unit.attackTimer < 0) {
-        unit.attackTimer = 0; // clamped: never accumulate a burst of free attacks
+        unit.attackTimer = 0;
       }
 
       // 2c. Close the gap when out of range
@@ -285,7 +305,6 @@ export function simulateTick(c, dt) {
 
     evaluate(c);
   } else if (c.time - c.endTime > RESOLVE_HOLD) {
-    // Hold the result banner for a beat, then let the store transition phases.
     c.status = 'resolved';
   }
 }
